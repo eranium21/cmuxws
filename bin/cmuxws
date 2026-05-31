@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  cmuxws [repo] [options]
+
+Options:
+  --agent <command>        Command to start in each workspace. Default: codex-yolo
+  --codex                  Start codex-yolo in each workspace. This is the default.
+  --claude                 Start claude-yolo in each workspace.
+  --no-agent               Create workspaces without starting an agent.
+  --include <a,b,c>        Extra workspace names to append.
+  --print                  Print detected workspace names and exit.
+  --dry-run                Print cmux actions without creating anything.
+  -h, --help               Show this help.
+
+Detection order:
+  1. .cmux/features.txt, one workspace name per line.
+  2. Expo Router tab titles from app/(tabs)/_layout.tsx.
+  3. Common navigation/menu files with label: "..." entries.
+  4. Common web route files under app/, pages/, and src/pages/.
+  5. Common feature directories under features/, modules/, domains/, and src/features/.
+USAGE
+}
+
+repo=""
+agent="${CMUXWS_AGENT:-codex-yolo}"
+start_agent=1
+print_only=0
+dry_run=0
+extra_names=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agent)
+      [[ $# -ge 2 ]] || { echo "--agent requires a command" >&2; exit 2; }
+      agent="$2"
+      start_agent=1
+      shift 2
+      ;;
+    --codex)
+      agent="codex-yolo"
+      start_agent=1
+      shift
+      ;;
+    --claude)
+      agent="claude-yolo"
+      start_agent=1
+      shift
+      ;;
+    --no-agent)
+      start_agent=0
+      shift
+      ;;
+    --include)
+      [[ $# -ge 2 ]] || { echo "--include requires a comma-separated list" >&2; exit 2; }
+      extra_names="$2"
+      shift 2
+      ;;
+    --print)
+      print_only=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [[ -n "$repo" ]]; then
+        echo "Only one repo path is supported" >&2
+        exit 2
+      fi
+      repo="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$repo" ]]; then
+  repo="$PWD"
+fi
+
+if [[ ! -d "$repo" ]]; then
+  echo "Repo path does not exist: $repo" >&2
+  exit 1
+fi
+
+if ! command -v cmux >/dev/null 2>&1; then
+  echo "cmux is required but was not found in PATH." >&2
+  exit 127
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required but was not found in PATH." >&2
+  exit 127
+fi
+
+repo="$(cd "$repo" && pwd -P)"
+
+names=()
+while IFS= read -r name; do
+  names+=("$name")
+done < <(REPO="$repo" EXTRA_NAMES="$extra_names" node <<'NODE'
+const fs = require('fs')
+const path = require('path')
+
+const repo = process.env.REPO
+const extraNames = (process.env.EXTRA_NAMES || '')
+  .split(',')
+  .map((name) => name.trim())
+  .filter(Boolean)
+
+const seen = new Set()
+const result = []
+
+function add(name) {
+  const clean = String(name || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!clean || clean.length > 48) return
+  if (/^[./_[\]{}()]+$/.test(clean)) return
+
+  const key = clean.toLowerCase()
+  if (seen.has(key)) return
+  seen.add(key)
+  result.push(clean)
+}
+
+function titleFromSegment(segment) {
+  const clean = segment
+    .replace(/\.(page|route|screen|tsx|ts|jsx|js|mdx)$/i, '')
+    .replace(/^\[+|\]+$/g, '')
+    .replace(/^\(+|\)+$/g, '')
+    .replace(/^index$/i, 'Dashboard')
+    .replace(/[-_]+/g, ' ')
+    .trim()
+
+  if (!clean || clean.startsWith('+') || clean.startsWith('_')) return ''
+
+  return clean.replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function read(file) {
+  try {
+    return fs.readFileSync(file, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+function exists(file) {
+  try {
+    return fs.existsSync(file)
+  } catch {
+    return false
+  }
+}
+
+function walk(dir, maxDepth, files = [], depth = 0) {
+  if (depth > maxDepth || !exists(dir)) return files
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === 'build') continue
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) walk(full, maxDepth, files, depth + 1)
+    else files.push(full)
+  }
+  return files
+}
+
+const explicit = path.join(repo, '.cmux', 'features.txt')
+if (exists(explicit)) {
+  for (const line of read(explicit).split(/\r?\n/)) {
+    const trimmed = line.replace(/#.*/, '').trim()
+    if (trimmed) add(trimmed)
+  }
+}
+
+if (result.length === 0) {
+  const tabLayouts = [
+    path.join(repo, 'app', '(tabs)', '_layout.tsx'),
+    path.join(repo, 'app', '(tabs)', '_layout.jsx'),
+    path.join(repo, 'src', 'app', '(tabs)', '_layout.tsx'),
+    path.join(repo, 'src', 'app', '(tabs)', '_layout.jsx'),
+  ]
+
+  for (const layout of tabLayouts) {
+    const source = read(layout)
+    if (!source) continue
+
+    for (const match of source.matchAll(/title\s*:\s*['"]([^'"]+)['"]/g)) {
+      add(match[1])
+    }
+
+    if (result.length > 0) break
+  }
+}
+
+if (result.length === 0) {
+  const navFiles = walk(repo, 5)
+    .filter((file) => /\.(tsx|ts|jsx|js)$/.test(file))
+    .filter((file) => {
+      const rel = path.relative(repo, file)
+      if (/(^|\/)(node_modules|dist|build|\.git)(\/|$)/.test(rel)) return false
+      return /(^|\/)(app-navigation|navigation|nav|menu|sidebar|tabs)\.(tsx|ts|jsx|js)$/i.test(rel)
+    })
+
+  for (const file of navFiles) {
+    const source = read(file)
+    if (!source) continue
+
+    const labels = []
+    for (const match of source.matchAll(/\blabel\s*:\s*['"]([^'"]+)['"]/g)) {
+      labels.push(match[1])
+    }
+
+    if (labels.length > 1) {
+      for (const label of labels) add(label)
+      break
+    }
+  }
+}
+
+if (result.length === 0) {
+  const routeRoots = ['app', 'src/app', 'pages', 'src/pages']
+  const routeFiles = []
+
+  for (const root of routeRoots) {
+    const absRoot = path.join(repo, root)
+    if (!exists(absRoot)) continue
+    for (const file of walk(absRoot, 3)) {
+      const rel = path.relative(absRoot, file)
+      if (!/\.(tsx|ts|jsx|js|mdx)$/.test(file)) continue
+      if (/(^|\/)(api|_app|_document|_layout|\+html|\+not-found)(\.|\/)/.test(rel)) continue
+      if (!/(^|\/)(page|index)\.(tsx|ts|jsx|js|mdx)$/.test(rel) && !/^[^/]+\.(tsx|ts|jsx|js|mdx)$/.test(rel)) continue
+
+      const parts = rel
+        .split(path.sep)
+        .filter((part) => !/^\(.+\)$/.test(part))
+
+      const segment = parts.length === 1 ? parts[0] : parts[0]
+      const title = titleFromSegment(segment)
+      if (title) routeFiles.push(title)
+    }
+  }
+
+  for (const name of routeFiles) add(name)
+}
+
+if (result.length === 0) {
+  for (const root of ['features', 'modules', 'domains', 'src/features', 'src/modules', 'src/domains']) {
+    const absRoot = path.join(repo, root)
+    if (!exists(absRoot)) continue
+    for (const entry of fs.readdirSync(absRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) add(titleFromSegment(entry.name))
+    }
+  }
+}
+
+if (result.length === 0) {
+  add('Overview')
+  add('Implementation')
+  add('Tests')
+}
+
+for (const name of extraNames) add(name)
+
+for (const name of result) console.log(name)
+NODE
+)
+
+if [[ ${#names[@]} -eq 0 ]]; then
+  echo "No workspace names detected for $repo" >&2
+  exit 1
+fi
+
+if [[ "$print_only" -eq 1 ]]; then
+  printf '%s\n' "${names[@]}"
+  exit 0
+fi
+
+colors=("Charcoal" "Navy" "Teal" "Green" "Purple" "Amber" "Olive" "Brown" "Orange" "Blue" "Red" "Pink")
+
+run() {
+  if [[ "$dry_run" -eq 1 ]]; then
+    printf '+' >&2
+    printf ' %q' "$@" >&2
+    printf '\n' >&2
+    return 0
+  fi
+
+  "$@"
+}
+
+if [[ "$dry_run" -eq 1 ]]; then
+  echo "Detected workspaces for $repo:" >&2
+  printf '  %s\n' "${names[@]}" >&2
+  run cmux new-window
+  window_ref="window:<new>"
+else
+  run cmux new-window >/dev/null
+  window_ref="$(cmux current-window)"
+fi
+
+declare -a refs=()
+for i in "${!names[@]}"; do
+  output="$(run cmux new-workspace --window "$window_ref" --name "${names[$i]}" --cwd "$repo" --focus false)"
+  if [[ "$dry_run" -eq 1 ]]; then
+    ref="workspace:$((i + 1))"
+  else
+    ref="$(printf '%s\n' "$output" | grep -Eo 'workspace:[0-9]+|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' | head -n 1)"
+  fi
+
+  if [[ -z "$ref" ]]; then
+    echo "Could not parse workspace ref from: $output" >&2
+    exit 1
+  fi
+
+  refs+=("$ref")
+  color="${colors[$((i % ${#colors[@]}))]}"
+  run cmux workspace-action --action set-color --window "$window_ref" --workspace "$ref" --color "$color" >/dev/null
+done
+
+if [[ "$start_agent" -eq 1 && -n "$agent" ]]; then
+  for ref in "${refs[@]}"; do
+    run cmux send --window "$window_ref" --workspace "$ref" "$agent" >/dev/null
+    run cmux send-key --window "$window_ref" --workspace "$ref" Return >/dev/null
+  done
+fi
+
+run cmux select-workspace --window "$window_ref" --workspace "${refs[0]}" >/dev/null
+
+if [[ "$dry_run" -eq 0 ]]; then
+  echo "Created ${#refs[@]} cmux workspaces in $window_ref for $repo"
+  printf '  %s\n' "${names[@]}"
+fi
