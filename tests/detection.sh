@@ -61,3 +61,17 @@ assert_output "$routes" $'Dashboard\nClients\nSettings'
 features="$tmp_root/features"
 mkdir -p "$features/src/features/pipeline" "$features/src/features/user-settings"
 assert_output "$features" $'Pipeline\nUser Settings'
+
+dry_run_order="$tmp_root/dry-run-order"
+mkdir -p "$dry_run_order/.cmux"
+cat > "$dry_run_order/.cmux/features.txt" <<'EOF'
+Dashboard
+Companies
+Contacts
+EOF
+dry_run_actual="$("$repo_root/bin/cmuxws" "$dry_run_order" --dry-run --no-agent 2>&1 >/dev/null | sed -n 's/.*--name \([^ ]*\).*/\1/p')"
+assert_output_text=$'Contacts\nCompanies\nDashboard'
+if [[ "$dry_run_actual" != "$assert_output_text" ]]; then
+  printf 'Expected dry-run creation order:\n%s\n\nActual:\n%s\n' "$assert_output_text" "$dry_run_actual" >&2
+  exit 1
+fi

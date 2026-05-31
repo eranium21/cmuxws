@@ -328,10 +328,10 @@ else
 fi
 
 declare -a refs=()
-for i in "${!names[@]}"; do
+for ((i = ${#names[@]} - 1; i >= 0; i--)); do
   output="$(run cmux new-workspace --window "$window_ref" --name "${names[$i]}" --cwd "$repo" --focus false)"
   if [[ "$dry_run" -eq 1 ]]; then
-    ref="workspace:$((i + 1))"
+    ref="workspace:$(( ${#names[@]} - i ))"
   else
     ref="$(printf '%s\n' "$output" | grep -Eo 'workspace:[0-9]+|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' | head -n 1)"
   fi
@@ -341,7 +341,7 @@ for i in "${!names[@]}"; do
     exit 1
   fi
 
-  refs+=("$ref")
+  refs[$i]="$ref"
   color="${colors[$((i % ${#colors[@]}))]}"
   run cmux workspace-action --action set-color --window "$window_ref" --workspace "$ref" --color "$color" >/dev/null
 done
