@@ -96,11 +96,6 @@ if [[ ! -d "$repo" ]]; then
   exit 1
 fi
 
-if ! command -v cmux >/dev/null 2>&1; then
-  echo "cmux is required but was not found in PATH." >&2
-  exit 127
-fi
-
 if ! command -v node >/dev/null 2>&1; then
   echo "node is required but was not found in PATH." >&2
   exit 127
@@ -244,17 +239,30 @@ if (result.length === 0) {
       const rel = path.relative(absRoot, file)
       if (!/\.(tsx|ts|jsx|js|mdx)$/.test(file)) continue
       if (/(^|\/)(api|_app|_document|_layout|\+html|\+not-found)(\.|\/)/.test(rel)) continue
-      if (!/(^|\/)(page|index)\.(tsx|ts|jsx|js|mdx)$/.test(rel) && !/^[^/]+\.(tsx|ts|jsx|js|mdx)$/.test(rel)) continue
 
       const parts = rel
         .split(path.sep)
         .filter((part) => !/^\(.+\)$/.test(part))
 
-      const segment = parts.length === 1 ? parts[0] : parts[0]
+      if (parts.length === 0) continue
+
+      const fileName = parts[parts.length - 1]
+      if (/^\[.+\]\.(tsx|ts|jsx|js|mdx)$/.test(fileName)) continue
+      if (!/(^|\/)(page|index)\.(tsx|ts|jsx|js|mdx)$/.test(parts.join('/')) && !/^[^/]+\.(tsx|ts|jsx|js|mdx)$/.test(fileName)) continue
+
+      const segment = fileName === 'page.tsx' || fileName === 'page.ts' || fileName === 'page.jsx' || fileName === 'page.js' || fileName === 'page.mdx'
+        ? parts[parts.length - 2]
+        : fileName
       const title = titleFromSegment(segment)
       if (title) routeFiles.push(title)
     }
   }
+
+  routeFiles.sort((a, b) => {
+    if (a === 'Dashboard') return -1
+    if (b === 'Dashboard') return 1
+    return a.localeCompare(b)
+  })
 
   for (const name of routeFiles) add(name)
 }
@@ -289,6 +297,11 @@ fi
 if [[ "$print_only" -eq 1 ]]; then
   printf '%s\n' "${names[@]}"
   exit 0
+fi
+
+if [[ "$dry_run" -eq 0 ]] && ! command -v cmux >/dev/null 2>&1; then
+  echo "cmux is required but was not found in PATH." >&2
+  exit 127
 fi
 
 colors=("Charcoal" "Navy" "Teal" "Green" "Purple" "Amber" "Olive" "Brown" "Orange" "Blue" "Red" "Pink")

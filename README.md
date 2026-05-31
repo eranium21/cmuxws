@@ -1,5 +1,7 @@
 # cmuxws
 
+[![CI](https://github.com/eranium21/cmuxws/actions/workflows/ci.yml/badge.svg)](https://github.com/eranium21/cmuxws/actions/workflows/ci.yml)
+
 Create a new cmux window with one workspace per feature, route, or navigation item in a repo.
 
 `cmuxws` is a small shell CLI for people who like to work with one agent/workspace per product area. Run it from a repository and it will infer workspace names, create a cmux window, and optionally start `codex-yolo`, `claude-yolo`, or another agent command in every workspace.
@@ -12,7 +14,15 @@ Create a new cmux window with one workspace per feature, route, or navigation it
 
 ## Install
 
-Clone the repo and link the script:
+Install directly:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/eranium21/cmuxws/main/bin/cmuxws -o "$HOME/.local/bin/cmuxws"
+chmod +x "$HOME/.local/bin/cmuxws"
+```
+
+Or clone the repo and link the script:
 
 ```bash
 git clone https://github.com/eranium21/cmuxws.git
@@ -111,3 +121,12 @@ Options:
 ## License
 
 MIT
+
+## Development
+
+Run the local checks:
+
+```bash
+bash -n bin/cmuxws
+bash tests/detection.sh
+```
