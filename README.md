@@ -15,7 +15,7 @@ Create a new cmux window with one workspace per feature, route, or navigation it
 Clone the repo and link the script:
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USER/cmuxws.git
+git clone https://github.com/eranium21/cmuxws.git
 cd cmuxws
 chmod +x bin/cmuxws
 ln -sf "$PWD/bin/cmuxws" "$HOME/.local/bin/cmuxws"
